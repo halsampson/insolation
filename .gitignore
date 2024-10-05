@@ -1,5 +1,11 @@
 # Prerequisites
 *.d
+*.txt
+enc_temp_folder/
+x64/
+.vs/
+*.vsidx
+
 
 # Compiled Object files
 *.slo
@@ -30,3 +36,11 @@
 *.exe
 *.out
 *.app
+*.opendb
+*.ipch
+*.filters
+*.json
+*.user
+*.db
+*.db-shm
+*.db-wal
