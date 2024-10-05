@@ -1,1 +1,3 @@
-# insolation
+# Insolation 
+
+Solar panel production calculations
