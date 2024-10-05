@@ -1,3 +1,3 @@
 # Insolation 
 
-Solar panel production calculations
+Solar panel production and Powerwall state calculations
