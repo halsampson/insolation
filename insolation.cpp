@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include "private.txt"  // #define LatitudeDegrees and LongitudeDegrees
+const double A = 0.08;   // Altitude above sea level in km
 
 #define degC(F)  (((F) - 32) * 5 / 9.)
 
@@ -23,7 +24,6 @@ const double PanelBezel = 0.01; // m
 const double PanelArea = (1.890 - PanelBezel) * (1.046 - PanelBezel);  // m^2
 const double Efficiency = 0.204;
 // https://www.enfsolar.com/pv/panel-datasheet/crystalline/55457
-
 
 const double PI = 3.14159265359;
 #define radians(degrees)  (PI * (degrees) / 180)
@@ -76,45 +76,57 @@ const double longitude = radians(LongitudeDegrees);
 //   adjust for house fan, recirc pump, ...
 //   control Cmax outlet?
 
+time_t utc;
 struct tm tm; 
-#define day_of_year tm.tm_yday
-#define orbit(day) (2 * PI * (day_of_year - (day)) / 365) 
+#define dayOfYear tm.tm_yday
+#define orbit(day) (2 * PI * (dayOfYear - (day)) / 365) 
 #define solarHr(hr) (fmod(hr + 24 + 12, 24) - 12)
+double EoT;
 
-double AST() { // Apparent Solar Time in hours
-	time_t utc = time(NULL);
+const double L = latitude;
+double delta; // sun declination
+double a0, a1, k;  // air mass coefficients
+double Ion;
+
+void setDay() {
+	utc = time(NULL);
   gmtime_s(&tm, &utc);
-	// double orb = 2 * PI * (day_of_year + 1 - 81) / 364;
+
+	static int prevDayOfYear = -1;
+	if (dayOfYear == prevDayOfYear) return;
+
+	// double orb = 2 * PI * (dayOfYear + 1 - 81) / 364;
 	// double EoT = 9.87 * sin(2 * orb) - 7.53 * cos(orb) + 1.5 * sin(orb); // minutes
 
-	double orb = 0.01720197 * (365.25 * (tm.tm_year - 100) + day_of_year) + 6.24004077;
+	double orb = 0.01720197 * (365.25 * (tm.tm_year - 100) + dayOfYear) + 6.24004077;
 	double EoT = -7.659 * sin(orb) + 9.863 * sin(2 * orb + 3.5932); // Equation of Time minutes
+
+	delta = radians(23.45) * sin(orbit(81));  
+  bool summer = dayOfYear >= 80 && dayOfYear <= 266;  // better smooth fn
+	double r0 = summer ? 0.97 : 1.03;
+	double r1 = summer ? 0.99 : 1.01;
+	double rk = summer ? 1.02 : 1.00;
+
+	a0 = r0 * (0.4237 - 0.00821 * pow(6   - A, 2));
+	a1 = r1 * (0.5055 + 0.00595 * pow(6.5 - A, 2));
+	k =  rk * (0.2711 + 0.01858 * pow(2.5 - A, 2));
+
+	const double Isc = 1362; // solar "constant" W/m^2; varies +/- 5 with 11 year solar cycle
+	Ion = Isc * (1 + 0.033 * cos(orbit(0)));
+}
+
+double apparentSolarTime() { // Apparent Solar Time in hours
 	return solarHr((utc % (24 * 60 * 60)) / 3600. + longitude / radians(360 / 24) + EoT / 60 - 12);  // -/+ 12 hours from solar noon
 }
 
 double insolation(double solar_hour, double PanelAzimuth, double beta = asin(3./12)) { // solar hour +/-12; PanelAzimuth +West; beta = panel tilt
 	// follows https://www.scribd.com/document/725924868/7-1-Solar-Radiation-on-Inclined-Surfaces
-
-	double delta = radians(23.45) * sin(orbit(81));  // sun declination
-	const double L = latitude;
-
 	double h = 2 * PI * solar_hour / 24;  // hour angle	
 	double alpha = asin(cos(L) * cos(delta) * cos(h) + sin(L) * sin(delta)); // solar altitude / elevation angle
   if (alpha < 0.01) return 0; // 0 when sun is below horizon
 
-	const double A = 0.08;   // Altitude above sea level in km
-	bool summer = day_of_year >= 80 && day_of_year <= 266;  // better smooth fn
-	double r0 = summer ? 0.97 : 1.03;
-	double r1 = summer ? 0.99 : 1.01;
-	double rk = summer ? 1.02 : 1.00;
-	double a0 = r0 * (0.4237 - 0.00821 * pow(6   - A, 2));
-	double a1 = r1 * (0.5055 + 0.00595 * pow(6.5 - A, 2));
-	double k =  rk * (0.2711 + 0.01858 * pow(2.5 - A, 2));
   double z = PI/2 - alpha; // zenith angle	
 	double taub = a0 + a1 * exp(-k / cos(z)); // transmittance
-
-	const double Isc = 1362; // solar "constant" W/m^2; varies +/- 5 with 11 year solar cycle
-	double Ion = Isc * (1 + 0.033 * cos(orbit(0)));
 
   double phi = acos((sin(alpha) * sin(L) - sin(delta)) / cos(alpha) * cos(L)) * (h >= 0 ? 1 : -1); // solar azimuth +West
 	double theta = acos(cos(alpha) * cos(fabs(phi - PanelAzimuth)) * sin(beta) + sin(alpha) * cos(beta)); // angle of incidence
@@ -123,7 +135,7 @@ double insolation(double solar_hour, double PanelAzimuth, double beta = asin(3./
 	double taud = 0.2710 - 0.2939 * taub;
 	double Ids = Ion * sin(alpha) * taud * (1 + cos(beta) / 2);
 
-	const double rho = 0.1; // ground reflectance
+	const double rho = 0.2; // ground reflectance
 	double Idg = (Ion * sin(alpha) * (taud + taub)) * rho * (1 - cos(beta)) / 2;
 
 	return Ib + Ids + Idg;
@@ -135,8 +147,8 @@ double kW(double hour) {
 
 	double ambientTemp = ForecastHighTemp * fabs(solarHr(hour + 12 - 3)) / 12 
 		                 + ForecastLowTemp  * fabs(solarHr(hour - 3)) / 12; // high at solar hour 3
-	double tempRise = (25.7 * mainInsolation / 800) * (1 - WindSpeed / 25);  // TODO: validate
-  double tempDerate = (ambientTemp + tempRise - 25) * 0.0125; // temperature dependendence
+	double tempRise = (25.7 * mainInsolation / 800) * max(0, 1 - WindSpeed / 30);  // TODO: better estimate: f(wind direction), radiative 
+  double tempDerate = (ambientTemp + tempRise - 25) * 0.0125; // temperature dependence
 	// https://www.enfsolar.com/pv/panel-datasheet/crystalline/55457
 
 	return ic * PanelArea * Efficiency * (1 - tempDerate) / 1000;
@@ -169,7 +181,7 @@ void setAirConTargetTemp(int degF) {
 #ifdef SetAirConTempURL
 	char setTargetTempCmd[256];
 	sprintf_s(setTargetTempCmd, sizeof setTargetTempCmd, "curl -d " SetAirConTempURL " > NUL", degF);
-	system(setTargetTempCmd);  // TODO: returns success but no effect; ?needs auth??
+	system(setTargetTempCmd);  // TODO: returns success but no effect; ?unlock?
 #endif
 }
 
@@ -186,14 +198,22 @@ int main() {
 
 	  double pWallPercent = 100 * pWall_kWh / Powerwall_kWh;
 
-		double hour = AST();
+		setDay();
+		double hour = apparentSolarTime();
 		double kWnow = kW(hour);
 		printf("%4.1f kW @ solar hour %.1f\n", kWnow, hour); 
 		printf("\n kWh\n");
 
+		double generated = 0;
+		for (double hr = -8; hr <= hour; hr += 0.25) 
+			generated += kW(hr); 
+		generated /= 4;
+		if (generated > 0) 
+			printf("%4.1f generated today\n", generated); // TODO: tree, clouds adjust
+
 		double rest_of_day = 0;
-		for (double hr = hour; hr < 12; hr += 0.25) {
-			double kw = kW(hr);  // TODO: temperature = f(t, Lo, Hi)
+		for (double hr = hour; hr < 8; hr += 0.25) {
+			double kw = kW(hr);
 			if (hr > 0 && kw <= 0) break;		
 			rest_of_day += kw; 
 		}
