@@ -8,13 +8,10 @@
 #include <conio.h>
 #include <windows.h>
 
-const double PI = 3.14159265359;
-#define radians(degrees)  (PI * (degrees) / 180)
-
 #include "private.txt"  // #define LatitudeDegrees and LongitudeDegrees
 
-const double latitude = radians(LatitudeDegrees);
-const double longitude = radians(LongitudeDegrees);
+const double PI = 3.14159265359;
+#define radians(degrees)  (PI * (degrees) / 180)
 
 // solar panels
 const double PanelBezel = 0.01; // m
@@ -28,7 +25,6 @@ const double Group1Azimuth = 0; // South
 const int Group2Qty = 2;
 const double Group2Azimuth = PI/2; // West
 
-
 // loads
 const double AirCon_kW = 5.6; // TODO: 2 stages?
 const double Idle_kW = 0.55;   // reduce -- depends on PCs, fan, ...
@@ -41,6 +37,9 @@ const double CMax_kWh = 7.2;
 const double Powerwall_kWh = 13.5;
 const int PowerwallMin_kWh = (20 - 4) * Powerwall_kWh / 100; // TODO: goes lower 
 const double RTloss = 0.10; // depends on temperature, pWall fans
+
+const double latitude = radians(LatitudeDegrees);
+const double longitude = radians(LongitudeDegrees);
 
 // References:
 // https://www.scribd.com/document/725924868/7-1-Solar-Radiation-on-Inclined-Surfaces
@@ -68,11 +67,8 @@ const double RTloss = 0.10; // depends on temperature, pWall fans
 //   adjust for house fan, recirc pump, ...
 //   control Cmax outlet?
 
-
-#define max(a,b) ((a) > (b) ? (a) : (b))
-
 struct tm tm; 
-#define day_of_year (tm.tm_yday)
+#define day_of_year tm.tm_yday
 #define orbit(day) (2 * PI * (day_of_year - (day)) / 365) 
 
 double AST() { // Apparent Solar Time in hours
@@ -82,8 +78,8 @@ double AST() { // Apparent Solar Time in hours
 	// double EoT = 9.87 * sin(2 * orb) - 7.53 * cos(orb) + 1.5 * sin(orb); // minutes
 
 	double orb = 0.01720197 * (365.25 * (tm.tm_year - 100) + day_of_year) + 6.24004077;
-	double EoT = -7.659 * sin(orb) + 9.863 * sin(2 * orb + 3.5932); // minutes
-	return fmod((utc % (24 * 60 * 60)) / 3600. + longitude / radians(360 / 24) + EoT / 60 + 24, 24) - 12;  // -/+ 12 hours
+	double EoT = -7.659 * sin(orb) + 9.863 * sin(2 * orb + 3.5932); // Equation of Time minutes
+	return fmod((utc % (24 * 60 * 60)) / 3600. + longitude / radians(360 / 24) + EoT / 60 + 24, 24) - 12;  // -/+ 12 hours from solar noon
 }
 
 double insolation(double solar_hour, double PanelAzimuth, double beta = asin(3./12)) { // solar hour +/-12; PanelAzimuth +West; beta = panel tilt
@@ -163,11 +159,13 @@ void setAirConTargetTemp(int degF) {
 }
 
 int main() {
-	const int pWallPercent = 27;  // TODO: enter to start
-	bool isdst = true;  // TODO - set
-	
+	printf("Powerwall level   %%\b\b\b");
+  int pWallPercent = 10 * (_getche() - '0') + _getche() - '0'; 
+	if (pWallPercent > 100) pWallPercent = 100; // letters -> 100%
 	double pWall_kWh = pWallPercent * Powerwall_kWh / 100;
 
+	bool isdst = true;  // TODO - set
+	
 	while (1) {
 	  printf("\033[2J\033[H"); // clear screen, home
 
@@ -196,9 +194,9 @@ int main() {
 			}
 
 		double idleToSundown = hour < sundownHr ? (sundownHr - hour) * Idle_kW : 0;
-		double overnight_kWh = (12 - sundownHr) * Idle_kW;  // midnite to morn
+		double overnight_kWh = (12 + isdst - sundownHr) * Idle_kW;  // midnite to morn sunup
 
-		double idleToMidnite = max(0, (12 - hour - isdst)) * Idle_kW; // TODO: accurate midnite
+		double idleToMidnite = max(0, 12 - isdst - hour) * Idle_kW; // TODO: accurate midnite
     double pWallToMidnite = idleToMidnite + PowerwallMin_kWh;
 	  double excessToMidnite = pWall_kWh + rest_of_day - pWallToMidnite;
 	  if (rest_of_day > 0 && pWallToMidnite > pWall_kWh) 
@@ -207,7 +205,7 @@ int main() {
 		double pWallToMorn = pWallToMidnite + overnight_kWh;
 		double excessToMorn = pWall_kWh + rest_of_day - pWallToMorn;
 		if (rest_of_day > 0 && pWallToMorn > pWall_kWh) 
-			printf("%4.1f PW %.0f%% to %.0f%% for overnight\n", -(pWallToMorn - pWallToMidnite), 100 * pWallToMidnite / Powerwall_kWh, 100 * pWallToMorn / Powerwall_kWh);
+			printf("%4.1f PW %.0f%% to %.0f%% for overnight\n", -(pWallToMorn - pWallToMidnite), 100 * max(pWall_kWh, pWallToMidnite) / Powerwall_kWh, 100 * pWallToMorn / Powerwall_kWh);
 
 		if (excessToMorn > 0) {
 			printf("%4.1f excess to morn\n", excessToMorn);
