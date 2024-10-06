@@ -10,14 +10,23 @@
 
 #include "private.txt"  // #define LatitudeDegrees and LongitudeDegrees
 
-const double PI = 3.14159265359;
-#define radians(degrees)  (PI * (degrees) / 180)
+#define degC(F)  (((F) - 32) * 5 / 9.)
+
+// weather
+const double ForecastLowTemp  = degC(67);
+const double ForecastHighTemp = degC(98);
+const double WindSpeed = 5; // mph when hottest
+// TODO: get ambient, wind each hour from weather forecast; also cloud cover %
 
 // solar panels
 const double PanelBezel = 0.01; // m
 const double PanelArea = (1.890 - PanelBezel) * (1.046 - PanelBezel);  // m^2
 const double Efficiency = 0.204;
 // https://www.enfsolar.com/pv/panel-datasheet/crystalline/55457
+
+
+const double PI = 3.14159265359;
+#define radians(degrees)  (PI * (degrees) / 180)
 
 const int Group1Qty = 14;
 const double Group1Azimuth = 0; // South
@@ -50,8 +59,8 @@ const double longitude = radians(LongitudeDegrees);
 // TODO: 
 //   model tree(s)
 //   get outside temperature, wind to derate panel output
+//     better panel temperature / wind cooling model
 //   read Darkness for cloud cover adjust
-//   panel temperature / wind model
 // 
 //   Powerwall level (API):
 //      https://github.com/jasonacox/Powerwall-Dashboard/discussions/392
@@ -70,6 +79,7 @@ const double longitude = radians(LongitudeDegrees);
 struct tm tm; 
 #define day_of_year tm.tm_yday
 #define orbit(day) (2 * PI * (day_of_year - (day)) / 365) 
+#define solarHr(hr) (fmod(hr + 24 + 12, 24) - 12)
 
 double AST() { // Apparent Solar Time in hours
 	time_t utc = time(NULL);
@@ -79,7 +89,7 @@ double AST() { // Apparent Solar Time in hours
 
 	double orb = 0.01720197 * (365.25 * (tm.tm_year - 100) + day_of_year) + 6.24004077;
 	double EoT = -7.659 * sin(orb) + 9.863 * sin(2 * orb + 3.5932); // Equation of Time minutes
-	return fmod((utc % (24 * 60 * 60)) / 3600. + longitude / radians(360 / 24) + EoT / 60 + 24, 24) - 12;  // -/+ 12 hours from solar noon
+	return solarHr((utc % (24 * 60 * 60)) / 3600. + longitude / radians(360 / 24) + EoT / 60 - 12);  // -/+ 12 hours from solar noon
 }
 
 double insolation(double solar_hour, double PanelAzimuth, double beta = asin(3./12)) { // solar hour +/-12; PanelAzimuth +West; beta = panel tilt
@@ -119,11 +129,16 @@ double insolation(double solar_hour, double PanelAzimuth, double beta = asin(3./
 	return Ib + Ids + Idg;
 }
 
-double kW(double hour, double cellTemp = 45.7) {
-	double tempDerate = (cellTemp - 25) * 0.0125; // temperature dependendence
+double kW(double hour) { 
+	double mainInsolation = insolation(hour, Group1Azimuth);
+  double ic = Group1Qty * mainInsolation  + Group2Qty * insolation(hour, Group2Azimuth);  // sum panel groups
+
+	double ambientTemp = ForecastHighTemp * fabs(solarHr(hour + 12 - 3)) / 12 
+		                 + ForecastLowTemp  * fabs(solarHr(hour - 3)) / 12; // high at solar hour 3
+	double tempRise = (25.7 * mainInsolation / 800) * (1 - WindSpeed / 25);  // TODO: validate
+  double tempDerate = (ambientTemp + tempRise - 25) * 0.0125; // temperature dependendence
 	// https://www.enfsolar.com/pv/panel-datasheet/crystalline/55457
 
-  double ic = Group1Qty * insolation(hour, Group1Azimuth) + Group2Qty * insolation(hour, Group2Azimuth);  // sum panel groups
 	return ic * PanelArea * Efficiency * (1 - tempDerate) / 1000;
 }
 
@@ -183,7 +198,6 @@ int main() {
 			rest_of_day += kw; 
 		}
 		rest_of_day /= 4;
-		rest_of_day *= 1 - 0.08;  // TODO: panel temperature, tree adjust - compare to actual
 		if (rest_of_day > 0) 
 			printf("%4.1f solar rest of day\n", rest_of_day);
 
