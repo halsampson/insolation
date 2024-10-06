@@ -35,8 +35,8 @@ const double TMY_kWh = 75;
 const int ChargerVolts = 240;
 const double CMax_kWh = 7.2;
 const double Powerwall_kWh = 13.5;
-const int PowerwallMin_kWh = (20 - 4) * Powerwall_kWh / 100; // TODO: goes lower 
-const double RTloss = 0.10; // depends on temperature, pWall fans
+const int PowerwallMin_kWh = (20 - 14) * Powerwall_kWh / 100; // TODO: why lower  than reserve??
+const double RTloss = 0.10; // depends on temperature, pWall fans  TODO: account for RTloss
 
 const double latitude = radians(LatitudeDegrees);
 const double longitude = radians(LongitudeDegrees);
@@ -169,7 +169,7 @@ int main() {
 	while (1) {
 	  printf("\033[2J\033[H"); // clear screen, home
 
-	 double pWallPercent = 100 * pWall_kWh / Powerwall_kWh;
+	  double pWallPercent = 100 * pWall_kWh / Powerwall_kWh;
 
 		double hour = AST();
 		double kWnow = kW(hour);
@@ -177,12 +177,13 @@ int main() {
 		printf("\n kWh\n");
 
 		double rest_of_day = 0;
-		for (double hr = hour; hr <= 12; hr += 0.25) {
+		for (double hr = hour; hr < 12; hr += 0.25) {
 			double kw = kW(hr);  // TODO: temperature = f(t, Lo, Hi)
 			if (hr > 0 && kw <= 0) break;		
 			rest_of_day += kw; 
 		}
 		rest_of_day /= 4;
+		rest_of_day *= 1 - 0.08;  // TODO: panel temperature, tree adjust - compare to actual
 		if (rest_of_day > 0) 
 			printf("%4.1f solar rest of day\n", rest_of_day);
 
@@ -193,10 +194,10 @@ int main() {
 				break;
 			}
 
-		double idleToSundown = hour < sundownHr ? (sundownHr - hour) * Idle_kW : 0;
+		double idleToSundown = hour < sundownHr ? (sundownHr - hour) * Idle_kW : 0;		
+		double idleToMidnite = (12 - isdst - hour - sundownHr) * Idle_kW; // TODO: accurate midnite
 		double overnight_kWh = (12 + isdst - sundownHr) * Idle_kW;  // midnite to morn sunup
 
-		double idleToMidnite = max(0, 12 - isdst - hour) * Idle_kW; // TODO: accurate midnite
     double pWallToMidnite = idleToMidnite + PowerwallMin_kWh;
 	  double excessToMidnite = pWall_kWh + rest_of_day - pWallToMidnite;
 	  if (rest_of_day > 0 && pWallToMidnite > pWall_kWh) 
@@ -224,12 +225,12 @@ int main() {
 		else if ((kWnow - Idle_kW) > 5 * ChargerVolts / 1000. && pWallPercent < 25)
 		  printf("%4.0f Amp no grid TMY charge\n", (kWnow - Idle_kW) * 1000 / ChargerVolts); // to avoid using grid
 		double homeKw = Idle_kW + (airCon ? AirCon_kW : 0);  // TODO: plus TMY, CMax, house fan, ...
-  	static double prevHour = hour;			
-		pWall_kWh += (hour - prevHour) * (kWnow - homeKw);
+  	static double prevHour = hour;
+		if (hour > prevHour) // avoid midnite
+		  pWall_kWh += (hour - prevHour) * (kWnow - homeKw);
 		prevHour = hour;
 		if (pWall_kWh > Powerwall_kWh) pWall_kWh = Powerwall_kWh;
-		if (pWall_kWh < PowerwallMin_kWh) pWall_kWh = PowerwallMin_kWh; // TODO -- can be less
-
+		if (pWall_kWh < PowerwallMin_kWh) pWall_kWh = PowerwallMin_kWh; 
 		Sleep(15 * 60 * 1000);
 	} 
 
