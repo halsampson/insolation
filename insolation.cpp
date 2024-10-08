@@ -8,47 +8,49 @@
 #include <conio.h>
 #include <windows.h>
 
-#include "private.txt"  // #define LatitudeDegrees and LongitudeDegrees
-const double A = 0.08;   // Altitude above sea level in km
-
-#define degC(F)  (((F) - 32) * 5 / 9.)
-
-// weather
-const double ForecastLowTemp  = degC(67);
-const double ForecastHighTemp = degC(98);
-const double WindSpeed = 5; // mph when hottest
-// TODO: get ambient, wind each hour from weather forecast; also cloud cover %
-
-// solar panels
-const double PanelBezel = 0.01; // m
-const double PanelArea = (1.890 - PanelBezel) * (1.046 - PanelBezel);  // m^2
-const double Efficiency = 0.204;
-// https://www.enfsolar.com/pv/panel-datasheet/crystalline/55457
-
 const double PI = 3.14159265359;
 #define radians(degrees)  (PI * (degrees) / 180)
 
+#include "private.txt"  // #define LatitudeDegrees and LongitudeDegrees
+const double latitude = radians(LatitudeDegrees);
+const double longitude = radians(LongitudeDegrees);
+const double A = 0.08;   // Altitude above sea level in km
+
+// solar panels
 const int Group1Qty = 14;
 const double Group1Azimuth = 0; // South
 
 const int Group2Qty = 2;
 const double Group2Azimuth = PI/2; // West
 
-// loads
-const double AirCon_kW = 5.6; // TODO: 2 stages?
-const double Idle_kW = 0.55;   // reduce -- depends on PCs, fan, ...
-const double HouseFan_kW = 0.25;  // depends on speed
+// typical panel specs
+const double PanelBezel = 0.01; // m
+const double PanelArea = (1.890 - PanelBezel) * (1.046 - PanelBezel);  // m^2
+const double Efficiency = 0.204;
+const double TempDerate = 1.25; // % / degC
+// https://www.enfsolar.com/pv/panel-datasheet/crystalline/55457
 
 // batteries
 const double TMY_kWh = 75;
 const int ChargerVolts = 240;
 const double CMax_kWh = 7.2;
-const double Powerwall_kWh = 13.5;
-const int PowerwallMin_kWh = (20 - 14) * Powerwall_kWh / 100; // TODO: why lower  than reserve??
+
+const double PWallMax_kWh = 13.5;  // Powerwall 3
+const double PWallMin_kWh = (20 - 1) * PWallMax_kWh / 100; // TODO: why much lower than reserve early morning?
 const double RTloss = 0.10; // depends on temperature, pWall fans  TODO: account for RTloss
 
-const double latitude = radians(LatitudeDegrees);
-const double longitude = radians(LongitudeDegrees);
+// loads
+const double AirCon_kW = 4.25;  // TODO: 2 stages?
+const double Idle_kW = 0.6;   // reduce -- fridge depends on interior temp; PCs, ...
+const double HouseFan_kW = 0.25;  // depends on speed
+
+// weather
+#define degC(F)  (((F) - 32) * 5 / 9.)
+const double ForecastHighTemp = degC(88);
+const double ForecastLowTemp  = degC(62);
+const double WindSpeed = 8; // mph when hottest
+// TODO: get ambient, wind each hour from weather forecast; also cloud cover %
+
 
 // References:
 // https://www.scribd.com/document/725924868/7-1-Solar-Radiation-on-Inclined-Surfaces
@@ -148,7 +150,7 @@ double kW(double hour) {
 	double ambientTemp = ForecastHighTemp * fabs(solarHr(hour + 12 - 3)) / 12 
 		                 + ForecastLowTemp  * fabs(solarHr(hour - 3)) / 12; // high at solar hour 3
 	double tempRise = (25.7 * mainInsolation / 800) * max(0, 1 - WindSpeed / 30);  // TODO: better estimate: f(wind direction), radiative 
-  double tempDerate = (ambientTemp + tempRise - 25) * 0.0125; // temperature dependence
+  double tempDerate = (ambientTemp + tempRise - 25) * TempDerate / 100 ; // temperature dependence
 	// https://www.enfsolar.com/pv/panel-datasheet/crystalline/55457
 
 	return ic * PanelArea * Efficiency * (1 - tempDerate) / 1000;
@@ -186,87 +188,94 @@ void setAirConTargetTemp(int degF) {
 }
 
 int main() {
-	printf("Powerwall level   %%\b\b\b");
-  int pWallPercent = 10 * (_getche() - '0') + _getche() - '0'; 
-	if (pWallPercent > 100) pWallPercent = 100; // letters -> 100%
-	double pWall_kWh = pWallPercent * Powerwall_kWh / 100;
-
-	bool isdst = true;  // TODO - set
-	
 	while (1) {
-	  printf("\033[2J\033[H"); // clear screen, home
+		printf("\nPowerwall level   %%\b\b\b");
+		int pWallPercent = 10 * (_getche() - '0') + _getche() - '0'; 
+		if (pWallPercent > 100) pWallPercent = 100; // letters -> 100%
+		double pWall_kWh = pWallPercent * PWallMax_kWh / 100;
 
-	  double pWallPercent = 100 * pWall_kWh / Powerwall_kWh;
+		bool isdst = true;  // TODO - set
+	
+		while (1) {
+			printf("\033[2J\033[H"); // clear screen, home
 
-		setDay();
-		double hour = apparentSolarTime();
-		double kWnow = kW(hour);
-		printf("%4.1f kW @ solar hour %.1f\n", kWnow, hour); 
-		printf("\n kWh\n");
+			double pWallPercent = 100 * pWall_kWh / PWallMax_kWh;
 
-		double generated = 0;
-		for (double hr = -8; hr <= hour; hr += 0.25) 
-			generated += kW(hr); 
-		generated /= 4;
-		if (generated > 0) 
-			printf("%4.1f generated today\n", generated); // TODO: tree, clouds adjust
+			setDay();
+			double hour = apparentSolarTime();
+			double kWnow = kW(hour);
+			printf("%4.1f kW @ solar hour %.1f\n", kWnow, hour); 
+			printf("\n kWh\n");
 
-		double rest_of_day = 0;
-		for (double hr = hour; hr < 8; hr += 0.25) {
-			double kw = kW(hr);
-			if (hr > 0 && kw <= 0) break;		
-			rest_of_day += kw; 
-		}
-		rest_of_day /= 4;
-		if (rest_of_day > 0) 
-			printf("%4.1f solar rest of day\n", rest_of_day);
+			double generated = 0;
+			for (double hr = -8; hr <= hour; hr += 0.25) 
+				generated += kW(hr); 
+			generated /= 4;
+			if (generated > 0) 
+				printf("%4.1f generated today\n", generated); // TODO: tree, clouds adjust
 
-	  double sundownHr;
-		for (double hr = 4; hr <= 12; hr += 0.25) 
-			if (kW(hr) <= Idle_kW) {
-				sundownHr = hr;
-				break;
+			double rest_of_day = 0;
+			for (double hr = hour; hr < 8; hr += 0.25) {
+				double kw = kW(hr);
+				if (hr > 0 && kw <= 0) break;		
+				rest_of_day += kw; 
+			}
+			rest_of_day /= 4;
+			if (rest_of_day > 0) 
+				printf("%4.1f solar rest of day\n", rest_of_day);
+
+			double sundownHr;
+			for (double hr = 4; hr <= 12; hr += 0.25) 
+				if (kW(hr) <= Idle_kW) {
+					sundownHr = hr;
+					break;
+				}
+
+			double idleToSundown = max(0, sundownHr - hour) * Idle_kW;	
+			printf("%4.1f idle to sundown\n", -idleToSundown);
+
+			double idleSundownToMidnite = max(0, (12 - isdst - max(hour, sundownHr))) * Idle_kW; // TODO: accurate midnite
+			double pWallSundownToMidnite = idleSundownToMidnite + PWallMin_kWh;
+			double excessToMidnite = pWall_kWh + rest_of_day - idleToSundown- pWallSundownToMidnite;
+			if (excessToMidnite >= 0 && pWall_kWh < pWallSundownToMidnite) 
+				printf("%4.1f PW %.0f%% to %.0f%% sundown to midnite\n", pWall_kWh - pWallSundownToMidnite, pWallPercent, 100 * pWallSundownToMidnite / PWallMax_kWh);		
+
+			double overnight_kWh = (12 + isdst - sundownHr) * Idle_kW;  // midnite to morn sunup
+			double pWallToMorn = pWallSundownToMidnite + overnight_kWh;
+			double excessToMorn = excessToMidnite - overnight_kWh;
+			if (excessToMorn >= 0 && pWall_kWh < pWallToMorn)
+				printf("%4.1f PW %.0f%% to %.0f%% for overnight\n", -overnight_kWh, 100 * max(pWall_kWh, pWallSundownToMidnite) / PWallMax_kWh, 100 * pWallToMorn / PWallMax_kWh);
+
+			if (excessToMorn > 0) {
+				printf("%4.1f excess to next morning\n", excessToMorn);
+				printf("\n%.1f/%.1f hours air con OR\n", excessToMorn / AirCon_kW, excessToMidnite / AirCon_kW);
+				printf("%3d/%d%% TMY charge\n", (int)(100 * excessToMorn / TMY_kWh), (int)(100 * excessToMidnite / TMY_kWh));
+			} else {
+				if (excessToMidnite < 0) 
+					printf("%4.1f from grid < midnite\n", -excessToMidnite);
+				printf("%4.1f from grid > midnite\n", -excessToMorn - excessToMidnite);
+				setAirConTargetTemp(excessToMidnite < 0 ? 80 : 78);
 			}
 
-		double idleToSundown = hour < sundownHr ? (sundownHr - hour) * Idle_kW : 0;		
-		double idleToMidnite = (12 - isdst - hour - sundownHr) * Idle_kW; // TODO: accurate midnite
-		double overnight_kWh = (12 + isdst - sundownHr) * Idle_kW;  // midnite to morn sunup
+			bool airCon = airConOn();
+			if (airCon)
+				printf("%4.1f air con %.1f --> %.0f deg\n", -AirCon_kW, getVal("temp"), getVal("t_cool"));
+			else if ((kWnow - Idle_kW) > 5 * ChargerVolts / 1000. && pWallPercent < 25)
+				printf("%4.0f Amp no grid TMY charge\n", (kWnow - Idle_kW) * 1000 / ChargerVolts); // to avoid using grid
+			double homeKw = Idle_kW + (airCon ? AirCon_kW : 0);  // TODO: plus TMY, CMax, house fan, ...
+  		static double prevHour = hour;
+			if (hour > prevHour) // avoid midnite
+				pWall_kWh += (hour - prevHour) * (kWnow - homeKw);
+			prevHour = hour;
+			if (pWall_kWh > PWallMax_kWh) pWall_kWh = PWallMax_kWh;
+			if (pWall_kWh < PWallMin_kWh) pWall_kWh = PWallMin_kWh; 
 
-    double pWallToMidnite = idleToMidnite + PowerwallMin_kWh;
-	  double excessToMidnite = pWall_kWh + rest_of_day - pWallToMidnite;
-	  if (rest_of_day > 0 && pWallToMidnite > pWall_kWh) 
-			printf("%4.1f PW %.0f%% to %.0f%% til midnite\n", -(pWallToMidnite - pWall_kWh), pWallPercent, 100 * pWallToMidnite / Powerwall_kWh);		
-	
-		double pWallToMorn = pWallToMidnite + overnight_kWh;
-		double excessToMorn = pWall_kWh + rest_of_day - pWallToMorn;
-		if (rest_of_day > 0 && pWallToMorn > pWall_kWh) 
-			printf("%4.1f PW %.0f%% to %.0f%% for overnight\n", -(pWallToMorn - pWallToMidnite), 100 * max(pWall_kWh, pWallToMidnite) / Powerwall_kWh, 100 * pWallToMorn / Powerwall_kWh);
-
-		if (excessToMorn > 0) {
-			printf("%4.1f excess to morn\n", excessToMorn);
-			printf("\n%3d/%d%% TMY charge OR\n", (int)(100 * excessToMorn / TMY_kWh), (int)(100 * excessToMidnite / TMY_kWh));
-			printf("%.1f/%.1f hours air con\n", excessToMorn / AirCon_kW, excessToMidnite / AirCon_kW);
-		} else {
-			if (excessToMidnite < 0) 
-				printf("%4.1f from grid < midnite\n", -excessToMidnite);
-			printf("%4.1f from grid > midnite\n", -excessToMorn - excessToMidnite);
-			setAirConTargetTemp(excessToMidnite < 0 ? 80 : 78);
-		}
-
-		bool airCon = airConOn();
-		if (airCon)
-			printf("%4.1f air con %.1f --> %.0f deg\n", -AirCon_kW, getVal("temp"), getVal("t_cool"));
-		else if ((kWnow - Idle_kW) > 5 * ChargerVolts / 1000. && pWallPercent < 25)
-		  printf("%4.0f Amp no grid TMY charge\n", (kWnow - Idle_kW) * 1000 / ChargerVolts); // to avoid using grid
-		double homeKw = Idle_kW + (airCon ? AirCon_kW : 0);  // TODO: plus TMY, CMax, house fan, ...
-  	static double prevHour = hour;
-		if (hour > prevHour) // avoid midnite
-		  pWall_kWh += (hour - prevHour) * (kWnow - homeKw);
-		prevHour = hour;
-		if (pWall_kWh > Powerwall_kWh) pWall_kWh = Powerwall_kWh;
-		if (pWall_kWh < PowerwallMin_kWh) pWall_kWh = PowerwallMin_kWh; 
-		Sleep(15 * 60 * 1000);
-	} 
+			int sleep = 15 * 60 * 1000 / 100;
+			while (!_kbhit() && sleep--)
+				Sleep(100);
+			if (_kbhit()) break;
+		} 
+	}
 
   return 0;
 }
